@@ -385,9 +385,19 @@ impl ApplicationHandle {
                 window_handle.set_occluded(occluded);
                 if occluded {
                     self.animating_windows.remove(&window_id);
+                } else if window_handle.window_state.request_paint {
+                    // A paint asked for while the window was hidden waited
+                    // for it to show again.
+                    window_handle.window.request_redraw();
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Floem asks for a redraw only with a paint requested, so a
+                // redraw that arrives without one came from the system: an X11
+                // window with no compositor behind it keeps no copy of its
+                // pixels, and the uncovered part shows whatever was on the
+                // screen until the window paints it again.
+                window_handle.window_state.request_paint = true;
                 window_handle.render_frame();
             }
             WindowEvent::PanGesture { .. } => {}
@@ -686,7 +696,6 @@ impl ApplicationHandle {
             }
 
             if handle.window_state.request_paint && handle.can_render_now() {
-                handle.window.request_redraw();
                 let frame_interval = handle
                     .window
                     .current_monitor()
@@ -695,6 +704,12 @@ impl ApplicationHandle {
                     .map(|mhz| Duration::from_nanos(1_000_000_000_000 / mhz.get() as u64))
                     .unwrap_or(Duration::from_millis(8));
                 handle.render_frame_if_due(frame_interval);
+                // Ask for a redraw only for a paint still owed: one asked for
+                // after this paint would paint the frame a second time, as
+                // every redraw now paints.
+                if handle.window_state.request_paint {
+                    handle.window.request_redraw();
+                }
             }
 
             if !done || start.elapsed() >= budget {
